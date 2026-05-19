@@ -1,0 +1,56 @@
+{
+  "blueprint": "gcp_ingesta_edd",
+  "identifier": "PAS0046-3567",
+  "title": "PAS0046-3567",
+  "createdAt": "2026-05-12T10:00:00.000Z",
+  "updatedAt": "2026-05-12T10:00:00.000Z",
+  "createdBy": "manual-test",
+  "updatedBy": "manual-test",
+  "scorecardsStats": 100,
+  "scorecardsRuleCount": 3,
+  "scorecards": {
+    "tech": {
+      "level": "Gold"
+    },
+    "server_compliance": {
+      "level": "Gold"
+    },
+    "cumplimiento_edd": {
+      "level": "Gold"
+    }
+  },
+  "properties": {
+    "hu": "PAS0046-3567",
+    "descripcion_ingesta": "Ingesta VMC con salida universal DBT",
+    "nombre_proyecto": "sgt",
+    "celula": "Kratos",
+    "source_to_raw_enabled": true,
+    "raw_to_stage_enabled": true,
+    "stage_to_universal_enabled": true,
+    "source_to_raw_technology": "MFT",
+    "raw_to_stage_technology": "Dataflow",
+    "stage_to_universal_technology": "DBT",
+    "gcp_project_prod": "bch-prj-gds-sgt-pr-45c3",
+    "raw_to_stage_mapeo": {
+      "dataset": "production_stage",
+      "table": "tbl_ap0516_vmc_dia"
+    },
+    "stage_to_universal_mapeo": {
+      "origen": [
+        {
+          "tabla": "tbl_ap0516_vmc_dia",
+          "dataset": "production_stage"
+        }
+      ],
+      "destino": [
+        {
+          "tabla": "sat_vmc_dia",
+          "dataset": "production_universal_sgt"
+        }
+      ]
+    },
+    "TLS_feature_branche": "https://github.com/bch-dryrun/tls_parametros_sgt/tree/feature-tst-01",
+    "STG_feature_branche": "https://github.com/bch-dryrun/sgt_stage_cu1/tree/feature-test",
+    "UNI_feature_branche": "https://github.com/bch-dryrun/sgt_universal_cu1/tree/feature-tst"
+  }
+}
