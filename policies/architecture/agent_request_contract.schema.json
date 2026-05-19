@@ -1,0 +1,74 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.org/autoedd/architecture-agent-request.schema.json",
+  "title": "AutoEdd Architecture Agent Request",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "contract_version",
+    "request_id",
+    "pull_request",
+    "input_payload",
+    "authorized_policy_files",
+    "execution_rules"
+  ],
+  "properties": {
+    "contract_version": {
+      "type": "string",
+      "const": "1.0"
+    },
+    "request_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "pull_request": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["url", "body_source"],
+      "properties": {
+        "url": {"type": "string", "minLength": 1},
+        "body_source": {"type": "string", "const": "pull_request_body"},
+        "head_sha": {"type": ["string", "null"]}
+      }
+    },
+    "input_payload": {
+      "type": "object"
+    },
+    "authorized_policy_files": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["path", "content_type"],
+        "properties": {
+          "path": {"type": "string", "minLength": 1},
+          "content_type": {"type": "string", "enum": ["yaml", "json", "markdown"]}
+        }
+      }
+    },
+    "execution_rules": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "allowed_results",
+        "blocking_results",
+        "must_not_hallucinate",
+        "must_cite_evidence"
+      ],
+      "properties": {
+        "allowed_results": {
+          "type": "array",
+          "items": {"type": "string"},
+          "minItems": 1
+        },
+        "blocking_results": {
+          "type": "array",
+          "items": {"type": "string"}
+        },
+        "must_not_hallucinate": {"type": "boolean", "const": true},
+        "must_cite_evidence": {"type": "boolean", "const": true}
+      }
+    }
+  }
+}

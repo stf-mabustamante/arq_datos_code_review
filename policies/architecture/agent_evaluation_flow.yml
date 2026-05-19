@@ -1,0 +1,178 @@
+agent_evaluation_flow:
+  name: autoedd_ingesta_evaluator
+  version: "1.1"
+  status: active
+
+  purpose: >
+    Resolver elegibilidad, repositorio, etapas y arquetipos antes de ejecutar
+    exclusivamente las reglas declaradas en el rulepack configurado.
+
+  authoritative_sources:
+    input_contract: contract_input.yml
+    rulepack: rulepack.yml
+    ini_field_mapping: ini_field_mapping_for_agents.json
+
+  design_principles:
+    - "No crear reglas ni arquetipos fuera del rulepack."
+    - "No interpretar campos del input fuera del contract."
+    - "No interpretar .ini fuera del mapping JSON autorizado."
+    - "Si el input no califica para validacion automatica, no revisar repositorios."
+
+  decision_inputs:
+    required_paths:
+      - $.properties.source_to_raw_enabled
+      - $.properties.raw_to_stage_enabled
+      - $.properties.stage_to_universal_enabled
+    technology_paths:
+      raw: $.properties.source_to_raw_technology
+      stage: $.properties.raw_to_stage_technology
+      universal: $.properties.stage_to_universal_technology
+    on_missing:
+      result: INPUT_INCOMPLETO
+      message: >
+        No es posible determinar la evaluacion porque faltan datos minimos para
+        resolver etapa o repositorio.
+
+  automatic_evaluation_gate:
+    rulepack_section: automatic_evaluation_eligibility
+    if_fail:
+      result: FAIL
+      category: AUTOMATIC_EVALUATION_NOT_APPLICABLE
+      message: >
+        Aplica EDD tradicional. El input no cumple con las validaciones minimas
+        para pasar por evaluacion automatica.
+      repository_review: skip
+      merge_action: block
+
+  repository_resolution:
+    source_path: $.pull_request.url
+    precedence: [tls, universal, stage]
+    source_extraction:
+      kind: github_repository_name_from_pull_request_url
+    repository_types:
+      tls:
+        match_glob: "*tls*parametros*ing*"
+      universal:
+        match_glob: "*universal*"
+      stage:
+        match_glob: "*stage*"
+    on_unresolved:
+      result: FAIL
+      category: UNSUPPORTED_REPOSITORY
+      message: >
+        No fue posible clasificar el nombre del repositorio del PR como tls,
+        stage o universal.
+
+  enabled_stages_resolution:
+    raw:
+      path: $.properties.source_to_raw_enabled
+      equals: true
+    stage:
+      path: $.properties.raw_to_stage_enabled
+      equals: true
+    universal:
+      path: $.properties.stage_to_universal_enabled
+      equals: true
+
+  applicability_matrix:
+    raw:
+      repo_type: tls
+      requires_enabled_stage: raw
+    stage:
+      repo_type: stage
+      requires_enabled_stage: stage
+    universal:
+      repo_type: universal
+      requires_enabled_stage: universal
+    tls:
+      repo_type: tls
+      requires_enabled_stage: one_or_more
+    on_raw_not_enabled_for_tls:
+      result: FAIL
+      category: RAW_NOT_ENABLED_FOR_TLS
+      message: El PR corresponde a tls_parametros, pero source_to_raw_enabled no es true.
+    on_stage_not_enabled:
+      result: FAIL
+      category: STAGE_NOT_ENABLED_FOR_REPO
+      message: El PR corresponde a stage, pero raw_to_stage_enabled no es true.
+    on_universal_not_enabled:
+      result: FAIL
+      category: UNIVERSAL_NOT_ENABLED_FOR_REPO
+      message: El PR corresponde a universal, pero stage_to_universal_enabled no es true.
+    on_tls_without_any_enabled_stage:
+      result: FAIL
+      category: NO_ENABLED_STAGE_FOR_TLS
+      message: El PR corresponde a tls_parametros, pero no hay etapas habilitadas.
+
+  archetype_resolution:
+    raw:
+      required_repo_type: tls
+      required_stage_enabled: raw
+      technology_path: $.properties.source_to_raw_technology
+    stage:
+      required_repo_type: stage
+      required_stage_enabled: stage
+      technology_path: $.properties.raw_to_stage_technology
+    universal:
+      required_repo_type: universal
+      required_stage_enabled: universal
+      technology_path: $.properties.stage_to_universal_technology
+    tls:
+      required_repo_type: tls
+      resolve_using: all_enabled_stages_plus_technology
+    on_no_matching_archetype:
+      result: ARQUETIPO_INVALIDO
+      message: >
+        No existe al menos un arquetipo en el rulepack configurado que coincida
+        con el repositorio, las etapas habilitadas y las tecnologias declaradas.
+
+  mandatory_usage:
+    contract:
+      - "Resolver rutas del input solo desde contract_input.yml."
+    rulepack:
+      - "Ejecutar todas las reglas de todos los arquetipos aplicables resueltos."
+      - "Para repositorios tls, evaluar cada etapa habilitada por el input y su tecnologia correspondiente."
+      - "No omitir arquetipos aplicables aunque mas de una etapa este habilitada."
+      - "Ejecutar automatic_evaluation_eligibility antes de revisar repositorios."
+    tls_ini:
+      - "Usar ini_field_mapping_for_agents.json para leer TASK, MESSAGE, CLOUD_RUN_NAME y campos relacionados."
+
+  execution_flow:
+    ordered_steps:
+      - read_minimum_input
+      - check_automatic_evaluation_eligibility
+      - resolve_repository_type
+      - resolve_enabled_stages
+      - check_applicability
+      - resolve_archetypes
+      - execute_rulepack_rules
+      - emit_final_result
+    on_failure:
+      read_minimum_input: INPUT_INCOMPLETO
+      check_automatic_evaluation_eligibility: FAIL
+      resolve_repository_type: FAIL
+      resolve_enabled_stages: FAIL
+      check_applicability: FAIL
+      resolve_archetypes: ARQUETIPO_INVALIDO
+      execute_rulepack_rules: FAIL
+
+  output_policy:
+    allowed_results: [PASS, FAIL, INPUT_INCOMPLETO, ARQUETIPO_INVALIDO]
+    result_rules:
+      PASS: Todas las reglas aplicables de todos los arquetipos resueltos cumplen.
+      FAIL: Falla alguna regla aplicable o falla la elegibilidad automatica.
+      INPUT_INCOMPLETO: Faltan datos minimos o datos requeridos por uno o mas arquetipos aplicables.
+      ARQUETIPO_INVALIDO: Falta al menos un arquetipo coincidente en el rulepack para las etapas habilitadas.
+    mandatory_output_content:
+      - repo_type
+      - evaluated_stages_or_reason
+      - technologies_if_applicable
+      - archetypes_if_applicable
+      - final_result
+      - evidence_for_failed_rules
+      - applies_edd_traditional_when_eligibility_fails
+    final_message_guidance:
+      - "No devolver PASS solo por elegibilidad o aplicabilidad intermedia."
+      - "Para repositorios tls, el mensaje final debe indicar todas las etapas habilitadas evaluadas."
+      - "Si el resultado es PASS, el mensaje final debe indicar explicitamente que aplica EDD automatico."
+      - "Si el resultado no es PASS, el mensaje final debe indicar explicitamente que se debe solicitar EDD tradicional con el equipo de Arquitectura de Datos."

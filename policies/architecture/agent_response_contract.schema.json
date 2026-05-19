@@ -1,0 +1,102 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.org/autoedd/architecture-agent-response.schema.json",
+  "title": "AutoEdd Architecture Agent Response",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "contract_version",
+    "result",
+    "category",
+    "message",
+    "blocking",
+    "rule_evidence"
+  ],
+  "properties": {
+    "contract_version": {
+      "type": "string",
+      "const": "1.0"
+    },
+    "result": {
+      "type": "string",
+      "enum": ["PASS", "FAIL", "INPUT_INCOMPLETO", "ARQUETIPO_INVALIDO"]
+    },
+    "category": {
+      "type": "string",
+      "minLength": 1
+    },
+    "message": {
+      "type": "string",
+      "minLength": 1
+    },
+    "repo_type": {
+      "type": ["string", "null"],
+      "enum": ["stage", "universal", "tls", null]
+    },
+    "evaluated_stage": {
+      "type": ["string", "null"],
+      "enum": ["stage", "universal", "raw", null]
+    },
+    "evaluated_stages": {
+      "type": ["array", "null"],
+      "items": {
+        "type": "string",
+        "enum": ["stage", "universal", "raw"]
+      },
+      "uniqueItems": true
+    },
+    "technology": {
+      "type": ["string", "null"]
+    },
+    "technologies": {
+      "type": ["array", "null"],
+      "items": {
+        "type": "string",
+        "minLength": 1
+      },
+      "uniqueItems": true
+    },
+    "archetype_id": {
+      "type": ["string", "null"]
+    },
+    "archetype_ids": {
+      "type": ["array", "null"],
+      "items": {
+        "type": "string",
+        "minLength": 1
+      },
+      "uniqueItems": true
+    },
+    "applies_edd_traditional": {
+      "type": "boolean"
+    },
+    "blocking": {
+      "type": "boolean"
+    },
+    "bindings": {
+      "type": "object",
+      "additionalProperties": true
+    },
+    "metadata": {
+      "type": "object",
+      "additionalProperties": true
+    },
+    "rule_evidence": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["rule_id", "status", "message", "details"],
+        "properties": {
+          "rule_id": {"type": "string", "minLength": 1},
+          "status": {"type": "string", "enum": ["PASS", "FAIL", "WARN"]},
+          "message": {"type": "string", "minLength": 1},
+          "details": {
+            "type": "object",
+            "additionalProperties": true
+          }
+        }
+      }
+    }
+  }
+}

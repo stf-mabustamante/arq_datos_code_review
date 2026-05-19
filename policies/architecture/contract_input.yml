@@ -1,0 +1,94 @@
+contract:
+  name: IngestaBlueprintInput
+  description: >
+    Payload de Port.io que contiene inputs para generacion automatica de ingestas
+    y resultados de scorecards asociados.
+  origin:
+    system: port.io
+    trigger: "on_ingesta_created"
+  usage:
+    agent_mode: read_only
+    primary_tasks:
+      - parse_and_normalize_payload
+      - evaluate_scorecards_and_properties
+      - compare_with_github_repository_facts
+    out_of_scope:
+      - do_not_write_back_to_port
+      - do_not_trigger_deployments
+      - do_not_use_top_level_status_for_decisions
+
+normalization:
+  strings:
+    transform: lowercase
+    applies_to:
+      - "all string fields"
+  comparisons:
+    strategy:
+      - "normalize both sides before compare"
+      - "treat missing as unknown (do not fail hard)"
+  null_handling:
+    policy: "null_or_missing_is_allowed"
+    behavior:
+      - "if field missing -> set as undefined"
+      - "if field null -> keep null"
+
+paths:
+  "$.blueprint":
+    type: string
+
+  "$.identifier":
+    type: string
+
+  "$.scorecards.tech.level":
+    type: string
+
+  "$.scorecards.server_compliance.level":
+    type: string
+
+  "$.scorecards.cumplimiento_edd.level":
+    type: string
+
+  "$.properties.source_to_raw_enabled":
+    type: boolean
+
+  "$.properties.source_to_raw_technology":
+    type: string
+
+  "$.properties.raw_to_stage_enabled":
+    type: boolean
+
+  "$.properties.stage_to_universal_enabled":
+    type: boolean
+
+  "$.properties.raw_to_stage_technology":
+    type: string
+
+  "$.properties.stage_to_universal_technology":
+    type: string
+
+  "$.properties.gcp_project_prod":
+    type: string
+
+  "$.properties.path_bucket":
+    type: string
+
+  "$.properties.raw_to_stage_mapeo.project":
+    type: string
+
+  "$.properties.raw_to_stage_mapeo.dataset":
+    type: string
+
+  "$.properties.raw_to_stage_mapeo.table":
+    type: string
+
+  "$.properties.stage_to_universal_mapeo.origen":
+    type: array
+
+  "$.properties.stage_to_universal_mapeo.destino":
+    type: array
+
+  "$.properties.stage_to_universal_mapeo.destino[].tabla":
+    type: string
+
+  "$.properties.stage_to_universal_mapeo.destino[].dataset":
+    type: string
