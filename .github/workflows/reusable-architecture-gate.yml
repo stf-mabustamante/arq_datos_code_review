@@ -1,0 +1,301 @@
+name: reusable-architecture-gate
+
+# Este workflow reusable centraliza exclusivamente la ejecución del gate de arquitectura.
+on:
+  workflow_call:
+    # Inputs mínimos que el repo consumidor puede sobrescribir al invocar el reusable.
+    inputs:
+      platform_repository:
+        description: Repositorio central que contiene reusable, scripts, config y policies.
+        required: false
+        type: string
+        default: bch-dryrun/arq_datos_code_review
+      platform_ref:
+        description: Ref del repositorio central desde donde se consumen los artefactos compartidos.
+        required: false
+        type: string
+        default: master
+      repo_config_path:
+        description: Ruta del override local opcional en el repo consumidor.
+        required: false
+        type: string
+        default: .code-review/repo-config.yml
+      runner_label:
+        description: Runner para los jobs del gate de arquitectura.
+        required: false
+        type: string
+        default: ubuntu-latest
+      architecture_agent_model:
+        description: Modelo a usar por el backend agente de arquitectura.
+        required: false
+        type: string
+        default: openai/gpt-4.1
+      architecture_agent_base_url:
+        description: Base URL del endpoint de GitHub Models.
+        required: false
+        type: string
+        default: https://models.github.ai/inference
+    secrets:
+      # Token opcional para permitir checkout del repo central cuando sea privado.
+      platform_token:
+        description: Token opcional para checkout del repositorio central cuando sea privado.
+        required: false
+
+# Permisos mínimos para leer código, consultar modelos y comentar el PR evaluado.
+permissions:
+  actions: read
+  contents: read
+  issues: write
+  models: read
+  pull-requests: write
+
+# Evita ejecuciones solapadas del mismo PR o ref dentro del mismo workflow.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  # Prepara el entorno compartido: ambos repos, dependencias y config efectiva.
+  prepare-platform:
+    runs-on: ${{ inputs.runner_label }}
+    outputs:
+      platform_repository: ${{ steps.platform-ref.outputs.platform_repository }}
+      platform_ref: ${{ steps.platform-ref.outputs.platform_ref }}
+      platform_checkout_path: ${{ steps.config.outputs.platform_checkout_path }}
+      effective_config_path: ${{ steps.config.outputs.effective_config_path }}
+      python_version: ${{ steps.config.outputs.python_version }}
+      architecture_enabled: ${{ steps.config.outputs.architecture_enabled }}
+      architecture_requirements_file: ${{ steps.config.outputs.architecture_requirements_file }}
+    steps:
+      # Trae el repo consumidor con el código real del PR que será evaluado.
+      - name: Check out consumer repository
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      # Resuelve explícitamente repo y ref del platform repo para evitar ambigüedad con github.workflow_ref.
+      - name: Resolve platform repository and ref
+        id: platform-ref
+        run: |
+          platform_repository='${{ inputs.platform_repository }}'
+          platform_ref='${{ inputs.platform_ref }}'
+          echo "platform_repository=${platform_repository}" >> "$GITHUB_OUTPUT"
+          echo "platform_ref=${platform_ref}" >> "$GITHUB_OUTPUT"
+
+      # Trae el repo central con scripts, configuración y policies compartidas.
+      - name: Check out platform repository
+        uses: actions/checkout@v6
+        with:
+          repository: ${{ steps.platform-ref.outputs.platform_repository }}
+          ref: ${{ steps.platform-ref.outputs.platform_ref }}
+          path: .code-review-platform
+          token: ${{ secrets.platform_token || secrets.GITHUB_TOKEN }}
+
+      # Python soporta el merge de config y la ejecución del wrapper de arquitectura.
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
+
+      # Instala solo dependencias base necesarias para resolver configuración y correr arquitectura.
+      - name: Install platform bootstrap dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r .code-review-platform/config/defaults/requirements-architecture.txt
+
+      # Combina defaults centralizados con override opcional del repo consumidor.
+      - name: Merge central defaults and local override
+        run: |
+          override_arg=""
+          if [[ -f "${{ inputs.repo_config_path }}" ]]; then
+            override_arg="--override-config ${{ inputs.repo_config_path }}"
+          fi
+          python .code-review-platform/scripts/resolve_gate_config.py \
+            --base-config .code-review-platform/config/defaults/review-gates.yml \
+            --output .code-review-effective/review-gates.yml \
+            ${override_arg}
+
+      # Expone por outputs la config efectiva que usará el job de arquitectura.
+      - name: Load effective gate configuration
+        id: config
+        run: |
+          python <<'PY'
+          from pathlib import Path
+          import yaml
+          import os
+
+          config_path = Path('.code-review-effective/review-gates.yml')
+          config = yaml.safe_load(config_path.read_text(encoding='utf-8')) or {}
+          gates = config.get('review_gates', {})
+          execution = gates.get('execution', {})
+          architecture = gates.get('architecture', {})
+
+          def rel(path_value: str) -> str:
+              return f".code-review-platform/{path_value}"
+
+          outputs = {
+              'platform_checkout_path': execution.get('platform_checkout_path', '.code-review-platform'),
+              'effective_config_path': config_path.as_posix(),
+              'python_version': str(execution.get('python_version', '3.11')),
+              'architecture_enabled': str(bool(architecture.get('enabled', False))).lower(),
+              'architecture_requirements_file': rel(architecture.get('requirements_file', 'config/defaults/requirements-architecture.txt')),
+          }
+
+          with Path(os.environ['GITHUB_OUTPUT']).open('a', encoding='utf-8') as handle:
+              for key, value in outputs.items():
+                  handle.write(f'{key}={value}\n')
+          PY
+
+  # Ejecuta el gate de arquitectura usando el código del PR y la lógica del repo central.
+  architecture-compliance:
+    runs-on: ${{ inputs.runner_label }}
+    needs: prepare-platform
+    if: needs.prepare-platform.outputs.architecture_enabled == 'true'
+    timeout-minutes: 15
+    steps:
+      # Rehidrata el repo consumidor en el commit exacto del head del PR.
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+      # Rehidrata también el repo central en el mismo ref desde el cual se invocó el reusable.
+      - uses: actions/checkout@v6
+        with:
+          repository: ${{ needs.prepare-platform.outputs.platform_repository }}
+          ref: ${{ needs.prepare-platform.outputs.platform_ref }}
+          path: ${{ needs.prepare-platform.outputs.platform_checkout_path }}
+          token: ${{ secrets.platform_token || secrets.GITHUB_TOKEN }}
+      - uses: actions/setup-python@v6
+        with:
+          python-version: ${{ needs.prepare-platform.outputs.python_version }}
+      # Instala las dependencias concretas requeridas por el wrapper y el runner agente.
+      - name: Install architecture dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r "${{ needs.prepare-platform.outputs.architecture_requirements_file }}"
+      - name: Probe GitHub Models access
+        env:
+          AUTOEDD_AGENT_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          AUTOEDD_AGENT_MODEL: ${{ inputs.architecture_agent_model }}
+          AUTOEDD_AGENT_BASE_URL: ${{ inputs.architecture_agent_base_url }}
+        run: |
+          python - <<'PY'
+          import json
+          import os
+          import urllib.error
+          import urllib.request
+
+          token = os.environ["AUTOEDD_AGENT_TOKEN"]
+          model = os.environ["AUTOEDD_AGENT_MODEL"]
+          base_url = os.environ["AUTOEDD_AGENT_BASE_URL"].rstrip("/")
+          payload = {
+              "model": model,
+              "messages": [{"role": "user", "content": "Reply only with OK"}],
+              "temperature": 0,
+              "max_tokens": 5,
+          }
+          request = urllib.request.Request(
+              url=f"{base_url}/chat/completions",
+              data=json.dumps(payload).encode("utf-8"),
+              method="POST",
+              headers={
+                  "Accept": "application/vnd.github+json",
+                  "Content-Type": "application/json",
+                  "Authorization": f"Bearer {token}",
+                  "X-GitHub-Api-Version": "2022-11-28",
+              },
+          )
+          try:
+              with urllib.request.urlopen(request, timeout=60) as response:
+                  body = response.read().decode("utf-8", errors="replace")
+                  print(f"GitHub Models probe OK: status={response.status} model={model}")
+                  print(body[:1000])
+          except urllib.error.HTTPError as exc:
+              body = exc.read().decode("utf-8", errors="replace")
+              print(f"GitHub Models probe FAIL: status={exc.code} reason={exc.reason} model={model} url={base_url}/chat/completions")
+              print(body[:2000])
+              raise
+          PY
+      - name: Regenerate effective gate configuration
+        run: |
+          override_arg=""
+          if [[ -f "${{ inputs.repo_config_path }}" ]]; then
+            override_arg="--override-config ${{ inputs.repo_config_path }}"
+          fi
+          python .code-review-platform/scripts/resolve_gate_config.py \
+            --base-config .code-review-platform/config/defaults/review-gates.yml \
+            --output .code-review-effective/review-gates.yml \
+            ${override_arg}
+      # Ejecuta el wrapper que valida contratos y delega la semántica al runner agente.
+      - name: Run architecture gate
+        id: run-architecture-gate
+        continue-on-error: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          AUTOEDD_AGENT_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          AUTOEDD_GITHUB_TOKEN: ${{ secrets.platform_token || secrets.GITHUB_TOKEN }}
+          PR_URL: ${{ github.event.pull_request.html_url }}
+          PR_BODY: ${{ github.event.pull_request.body }}
+          AUTOEDD_RESULT_JSON: .code-review-effective/architecture-result.json
+          AUTOEDD_RESULT_MD: .code-review-effective/architecture-result.md
+          AUTOEDD_AGENT_COMMAND: python .code-review-platform/scripts/run_architecture_agent.py
+          AUTOEDD_AGENT_MODEL: ${{ inputs.architecture_agent_model }}
+          AUTOEDD_AGENT_BASE_URL: ${{ inputs.architecture_agent_base_url }}
+        run: |
+          python .code-review-platform/scripts/run_architecture_gate.py \
+            --config "${{ needs.prepare-platform.outputs.effective_config_path }}" \
+            --platform-root "${{ needs.prepare-platform.outputs.platform_checkout_path }}"
+      - name: Create fallback architecture markdown when missing
+        if: always() && hashFiles('.code-review-effective/architecture-result.md') == ''
+        run: |
+          mkdir -p .code-review-effective
+          cat > .code-review-effective/architecture-result.md <<'EOF'
+          <!-- autoedd-architecture-gate -->
+          ## AutoEdd Architecture Gate
+          - Resultado final: FAIL
+          - Mensaje: El gate no genero markdown de salida. Revisar el step Run architecture gate para ver el error real.
+          EOF
+      # Publica o actualiza un único comentario persistente del gate sobre el PR.
+      - name: Comment architecture result on PR
+        if: always()
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            const fs = require('fs');
+            const marker = '<!-- autoedd-architecture-gate -->';
+            const body = fs.readFileSync('.code-review-effective/architecture-result.md', 'utf8');
+            const { owner, repo } = context.repo;
+            const issue_number = context.issue.number;
+            const comments = await github.paginate(github.rest.issues.listComments, {
+              owner,
+              repo,
+              issue_number,
+              per_page: 100,
+            });
+            const previous = comments.find((comment) => comment.body && comment.body.includes(marker));
+            if (previous) {
+              await github.rest.issues.updateComment({
+                owner,
+                repo,
+                comment_id: previous.id,
+                body,
+              });
+            } else {
+              await github.rest.issues.createComment({
+                owner,
+                repo,
+                issue_number,
+                body,
+              });
+            }
+      # Si el wrapper devolvió resultado bloqueante, el job falla para impedir el merge.
+      - name: Fail job when architecture gate blocks merge
+        if: steps.run-architecture-gate.outcome != 'success'
+        run: |
+          echo "Architecture gate reported a blocking result"
+          exit 1
