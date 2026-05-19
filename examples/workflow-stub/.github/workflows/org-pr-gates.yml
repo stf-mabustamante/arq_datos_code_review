@@ -1,0 +1,27 @@
+name: org-pr-gates
+
+on:
+  pull_request:
+    branches:
+      - qa
+      - QA
+      - Qa
+      - qA
+      - master
+
+permissions:
+  actions: read
+  contents: read
+  issues: write
+  models: read
+  pull-requests: write
+
+jobs:
+  call-central-platform:
+    uses: bch-dryrun/arq_datos_code_review/.github/workflows/reusable-architecture-gate.yml@master
+    with:
+      platform_repository: bch-dryrun/arq_datos_code_review
+      platform_ref: master
+      repo_config_path: .code-review/repo-config.yml
+      runner_label: ubuntu-latest
+    secrets: inherit
