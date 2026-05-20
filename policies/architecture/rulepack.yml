@@ -1,0 +1,443 @@
+rulepack:
+  name: rulepack_ingesta
+  version: "2.0"
+  status: active
+  purpose: >
+    Define validaciones AutoEdd repo-locales. Cada PR evalua solo el
+    repositorio actual; no depende de repos externos declarados por input.
+
+  output_policy:
+    allowed_states: [PASS, FAIL, INPUT_INCOMPLETO, ARQUETIPO_INVALIDO]
+    blocking_states: [FAIL, INPUT_INCOMPLETO, ARQUETIPO_INVALIDO]
+    minimum_input_not_met:
+      state: FAIL
+      category: MINIMUM_INPUT_NOT_MET
+      message_template: >
+        Falta informacion basica para evaluacion automatica: {{details}}.
+        Debe continuar por el camino presencial con Arquitectura de Datos.
+
+repo_types:
+  orchestration_tls:
+    usage: "Orquestacion de procesos."
+    repository_name_identification:
+      match_glob: "*tls*parametros*ing*"
+    key_paths:
+      - "edge/*.ini"
+    ini_field_validation:
+      mapping_sources:
+        - "ini_field_mapping_for_agents.json"
+
+  raw_to_stage_repo:
+    usage: "Codigo y artefactos RAW->STAGE."
+    repository_name_identification:
+      match_glob: "*stage*"
+    key_paths:
+      - "main.py"
+      - "templates/batch/*"
+      - "templates/schema/*"
+
+  stage_to_universal_repo:
+    usage: "Transformaciones y definicion DBT STAGE->UNIVERSAL."
+    repository_name_identification:
+      match_glob: "*universal*"
+    key_paths:
+      - "{{table_name}}/profiles.yml"
+      - "{{table_name}}/models/{{table_name}}/sources.yml"
+
+repository_scope:
+  current_pr_repository:
+    source: workflow_pull_request_checkout
+    branch_source: github.event.pull_request.head.ref
+    commit_source: github.event.pull_request.head.sha
+
+automatic_evaluation_eligibility:
+  description: >
+    Requiere scorecards.tech.level, scorecards.server_compliance.level y
+    scorecards.cumplimiento_edd.level == gold (case-insensitive).
+  checks:
+    - id: "scorecards_tech_level_gold"
+      type: equals_case_insensitive
+      input_path: "$.scorecards.tech.level"
+      expected_value: "gold"
+      on_fail_detail: "$.scorecards.tech.level debe ser 'gold'"
+    - id: "scorecards_server_compliance_level_gold"
+      type: equals_case_insensitive
+      input_path: "$.scorecards.server_compliance.level"
+      expected_value: "gold"
+      on_fail_detail: "$.scorecards.server_compliance.level debe ser 'gold'"
+    - id: "scorecards_cumplimiento_edd_level_gold"
+      type: equals_case_insensitive
+      input_path: "$.scorecards.cumplimiento_edd.level"
+      expected_value: "gold"
+      on_fail_detail: "$.scorecards.cumplimiento_edd.level debe ser 'gold'"
+  fail_behavior:
+    state: FAIL
+    category: MINIMUM_INPUT_NOT_MET
+    include_details:
+      - "for each failing check: path, expected, found_or_missing"
+    message: >
+      No cumple la base minima para evaluacion automatica; debe continuar por el
+      camino presencial con Arquitectura de Datos.
+
+stages:
+  raw:
+    description: "Ingesta origen->RAW."
+    technologies:
+      mft:
+        archetype_id: "raw_mft"
+        description: >
+          En repositorios TLS de parametros, identifica la orquestacion RAW via
+          MFT cuando la etapa source_to_raw esta habilitada.
+        applies_when:
+          repo_type: "orchestration_tls"
+        required_input_paths:
+          - "$.blueprint"
+          - "$.identifier"
+          - "$.scorecards.tech.level"
+          - "$.scorecards.server_compliance.level"
+          - "$.scorecards.cumplimiento_edd.level"
+          - "$.properties.source_to_raw_technology"
+        rules: []
+
+  stage:
+    description: "Ingesta RAW->STAGE."
+    technologies:
+      dataflow:
+        archetype_id: "stage_dataflow"
+        description: >
+          Valida RAW->STAGE via Dataflow en repo TLS o stage segun el tipo de
+          repositorio actual. Algunas reglas aplican a ambos, otras solo a TLS
+          y otras solo a stage.
+        applies_when:
+          repo_types: ["orchestration_tls", "raw_to_stage_repo"]
+        required_input_paths:
+          - "$.blueprint"
+          - "$.identifier"
+          - "$.scorecards.tech.level"
+          - "$.scorecards.server_compliance.level"
+          - "$.scorecards.cumplimiento_edd.level"
+          - "$.properties.raw_to_stage_technology"
+          - "$.properties.raw_to_stage_mapeo.table"
+        rules:
+          - id: "input_raw_to_stage_technology_is_dataflow"
+            stage: "stage"
+            technology: "dataflow"
+            rule_type: "input_field_equals"
+            description: "properties.raw_to_stage_technology debe ser Dataflow."
+            applies_when:
+              repo_types: ["orchestration_tls", "raw_to_stage_repo"]
+            input:
+              path: "$.properties.raw_to_stage_technology"
+              expected_value: "dataflow"
+              compare_mode: "equals_case_insensitive"
+            evidence:
+              require: ["input_path", "expected_value", "actual_value_or_missing"]
+
+          - id: "stage_schema_json_exists_per_input_table"
+            stage: "stage"
+            technology: "dataflow"
+            rule_type: "repo_file_exists_per_input_table_pattern"
+            description: >
+              En el repositorio stage, debe existir un JSON en templates/schema
+              por cada tabla declarada en properties.raw_to_stage_mapeo.table.
+              La busqueda se hace por un fragmento del nombre de tabla,
+              removiendo el prefijo tbl_ cuando exista.
+            applies_when:
+              repo_types: ["raw_to_stage_repo"]
+            input:
+              table_path: "$.properties.raw_to_stage_mapeo.table"
+              strip_prefixes: ["tbl_"]
+            target:
+              repo_scope: "current_pr_repository"
+              repo_type: "raw_to_stage_repo"
+              file_glob: "templates/schema/*.json"
+              file_name_contains_from_input_table: true
+            evidence:
+              require:
+                - "repo_file_path"
+                - "expected_table"
+                - "search_fragment"
+                - "actual_value_or_missing"
+
+          - id: "current_pr_select_dataflow_job_ini"
+            stage: "stage"
+            technology: "dataflow"
+            rule_type: "current_repo_ini_select"
+            description: >
+              En el repo actual del PR, buscar en edge/*.ini el bloque cuyo TASK
+              sea exactamente fw_ingesta_tasks.dataflow/run:create_job_templated.
+            applies_when:
+              repo_types: ["orchestration_tls"]
+            target:
+              repo_scope: "current_pr_repository"
+              repo_type: "orchestration_tls"
+              file_glob: "edge/*.ini"
+              task_equals: "fw_ingesta_tasks.dataflow/run:create_job_templated"
+              extract_source_mapping:
+                - "ini_field_mapping_for_agents.json"
+            output_binding:
+              bind_variable: "stage_dataflow_ini"
+            evidence:
+              require:
+                - "ini_file_path"
+                - "task_fragment"
+                - "message_fragment"
+
+          - id: "current_pr_dataflow_job_name_contains_execute_id"
+            stage: "stage"
+            technology: "dataflow"
+            rule_type: "bound_ini_message_field_contains"
+            description: >
+              El job_name del MESSAGE del ini seleccionado debe contener el
+              literal dataflow-#EXECUTE_ID#.
+            applies_when:
+              repo_types: ["orchestration_tls"]
+            target:
+              binding_ref: "stage_dataflow_ini"
+              extract_source_mapping:
+                - "ini_field_mapping_for_agents.json"
+            message_field:
+              path: "job_name"
+              expected_contains: "dataflow-#EXECUTE_ID#"
+              compare_mode: "equals_case_insensitive"
+            evidence:
+              require:
+                - "ini_file_path"
+                - "message_field"
+                - "expected_contains"
+                - "actual_value_or_missing"
+
+          - id: "current_pr_dataflow_input_file_path_matches_input_bucket"
+            stage: "stage"
+            technology: "dataflow"
+            rule_type: "bound_ini_message_field_equals_input"
+            description: >
+              properties.path_bucket debe coincidir con MESSAGE.input_file_path
+              del ini seleccionado para asegurar que el origen es el bucket GCP
+              esperado.
+            applies_when:
+              repo_types: ["orchestration_tls"]
+            input:
+              path: "$.properties.path_bucket"
+            target:
+              binding_ref: "stage_dataflow_ini"
+              extract_source_mapping:
+                - "ini_field_mapping_for_agents.json"
+            message_field:
+              path: "input_file_path"
+            compare:
+              mode: "equals_case_insensitive"
+            evidence:
+              require:
+                - "ini_file_path"
+                - "message_field"
+                - "expected_value"
+                - "actual_value_or_missing"
+
+          - id: "current_pr_dataflow_project_matches_input_project"
+            stage: "stage"
+            technology: "dataflow"
+            rule_type: "bound_ini_top_level_field_equals_input"
+            description: >
+              properties.raw_to_stage_mapeo.project debe coincidir con PROJECT
+              del ini seleccionado para asegurar que el destino es el proyecto
+              GCP esperado.
+            applies_when:
+              repo_types: ["orchestration_tls"]
+            input:
+              path: "$.properties.raw_to_stage_mapeo.project"
+            target:
+              binding_ref: "stage_dataflow_ini"
+              extract_source_mapping:
+                - "ini_field_mapping_for_agents.json"
+            top_level_field:
+              name: "PROJECT"
+            compare:
+              mode: "equals_case_insensitive"
+            evidence:
+              require:
+                - "ini_file_path"
+                - "top_level_field"
+                - "expected_value"
+                - "actual_value_or_missing"
+
+  universal:
+    description: "Modelado STAGE->UNIVERSAL."
+    technologies:
+      dbt:
+        archetype_id: "universal_dbt"
+        description: >
+          Valida STAGE->UNIVERSAL via DBT en repo TLS o universal segun el tipo
+          de repositorio actual. Algunas reglas aplican a ambos, otras solo a
+          TLS y otras solo a universal.
+        applies_when:
+          repo_types: ["orchestration_tls", "stage_to_universal_repo"]
+        required_input_paths:
+          - "$.blueprint"
+          - "$.identifier"
+          - "$.scorecards.tech.level"
+          - "$.scorecards.server_compliance.level"
+          - "$.scorecards.cumplimiento_edd.level"
+          - "$.properties.gcp_project_prod"
+          - "$.properties.stage_to_universal_technology"
+          - "$.properties.stage_to_universal_mapeo.origen"
+          - "$.properties.stage_to_universal_mapeo.destino"
+        rules:
+          - id: "input_stage_to_universal_technology_is_dbt"
+            stage: "universal"
+            technology: "dbt"
+            rule_type: "input_field_equals"
+            description: "properties.stage_to_universal_technology debe ser DBT."
+            applies_when:
+              repo_types: ["orchestration_tls", "stage_to_universal_repo"]
+            input:
+              path: "$.properties.stage_to_universal_technology"
+              expected_value: "dbt"
+              compare_mode: "equals_case_insensitive"
+            evidence:
+              require: ["input_path", "expected_value", "actual_value_or_missing"]
+
+          - id: "current_pr_select_uni_dbt_run_ini"
+            stage: "universal"
+            technology: "dbt"
+            rule_type: "current_repo_ini_select"
+            description: >
+              En el repo actual del PR, buscar en edge/*.ini un archivo cuyo
+              nombre contenga UNI y cuyo TASK sea exactamente
+              fw_ingesta_tasks.dbt/run:dbt_run.
+            applies_when:
+              repo_types: ["orchestration_tls"]
+            target:
+              repo_scope: "current_pr_repository"
+              repo_type: "orchestration_tls"
+              file_glob: "edge/*.ini"
+              file_name_contains: "UNI"
+              task_equals: "fw_ingesta_tasks.dbt/run:dbt_run"
+              extract_source_mapping:
+                - "ini_field_mapping_for_agents.json"
+            output_binding:
+              bind_variable: "universal_dbt_ini"
+            evidence:
+              require:
+                - "ini_file_path"
+                - "ini_filename"
+                - "task_fragment"
+                - "message_fragment"
+
+          - id: "current_pr_uni_project_matches_input_project"
+            stage: "universal"
+            technology: "dbt"
+            rule_type: "bound_ini_top_level_field_equals_input"
+            description: >
+              properties.gcp_project_prod debe coincidir con PROJECT del ini
+              UNI seleccionado para asegurar que el proyecto productivo es el
+              esperado.
+            applies_when:
+              repo_types: ["orchestration_tls"]
+            input:
+              path: "$.properties.gcp_project_prod"
+            target:
+              binding_ref: "universal_dbt_ini"
+              extract_source_mapping:
+                - "ini_field_mapping_for_agents.json"
+            top_level_field:
+              name: "PROJECT"
+            compare:
+              mode: "equals_case_insensitive"
+            evidence:
+              require:
+                - "ini_file_path"
+                - "top_level_field"
+                - "expected_value"
+                - "actual_value_or_missing"
+
+          - id: "current_pr_uni_has_distinct_ini_per_destino_dataset"
+            stage: "universal"
+            technology: "dbt"
+            rule_type: "current_repo_ini_exists_per_input_array_item"
+            description: >
+              Por cada item en properties.stage_to_universal_mapeo.destino,
+              debe existir un ini distinto en edge/*.ini cuyo nombre contenga el
+              dataset de destino y cuyo MESSAGE.dbt_project coincida con ese
+              mismo dataset.
+            applies_when:
+              repo_types: ["orchestration_tls"]
+            input:
+              array_path: "$.properties.stage_to_universal_mapeo.destino"
+              match_fields:
+                dataset: "$.dataset"
+                tabla: "$.tabla"
+            target:
+              repo_scope: "current_pr_repository"
+              repo_type: "orchestration_tls"
+              file_glob: "edge/*.ini"
+              task_equals: "fw_ingesta_tasks.dbt/run:dbt_run"
+              file_name_contains_input_field: "dataset"
+              extract_source_mapping:
+                - "ini_field_mapping_for_agents.json"
+            message_field:
+              path: "dbt_project"
+              compare_to_input_field: "dataset"
+            selection:
+              require_distinct_ini_per_input_item: true
+              distinctness_input_field: "tabla"
+            compare:
+              mode: "equals_case_insensitive"
+            evidence:
+              require:
+                - "input_array_path"
+                - "input_item_fragment"
+                - "ini_file_path"
+                - "ini_filename"
+                - "message_field"
+                - "expected_dataset"
+                - "actual_value_or_missing"
+
+          - id: "uni_root_folder_exists_per_destino_table"
+            stage: "universal"
+            technology: "dbt"
+            rule_type: "repo_directory_exists_for_input_table"
+            description: >
+              En el repositorio universal, debe existir en la raiz una carpeta
+              con el nombre de la tabla declarada en
+              properties.stage_to_universal_mapeo.destino[].tabla.
+            applies_when:
+              repo_types: ["stage_to_universal_repo"]
+            input:
+              table_name_from_input:
+                array_path: "$.properties.stage_to_universal_mapeo.destino"
+                field: "$.tabla"
+            target:
+              repo_scope: "current_pr_repository"
+              repo_type: "stage_to_universal_repo"
+            evidence:
+              require:
+                - "repo_directory_path"
+                - "expected_table"
+                - "actual_value_or_missing"
+
+          - id: "uni_profiles_prod_project_matches_input_gcp_project_prod"
+            stage: "universal"
+            technology: "dbt"
+            rule_type: "dbt_profiles_field_equals"
+            description: >
+              Cruza properties.gcp_project_prod con el contenido de
+              /<tabla_destino>/models/<tabla_destino>/profiles.yml en la ruta
+              <tabla_destino>.outputs.productions.projects del repo universal.
+            applies_when:
+              repo_types: ["stage_to_universal_repo"]
+            input:
+              path: "$.properties.gcp_project_prod"
+            target:
+              repo_scope: "current_pr_repository"
+              repo_type: "stage_to_universal_repo"
+              table_name_from_input:
+                array_path: "$.properties.stage_to_universal_mapeo.destino"
+                field: "$.tabla"
+              profiles_yml_path_template: "{{table_name}}/models/{{table_name}}/profiles.yml"
+              yml_path_any_of:
+                - "{{table_name}}.outputs.productions.projects"
+            compare:
+              mode: "equals_case_insensitive"
+            evidence:
+              require: ["repo_file_path", "yml_fragment", "expected_value", "actual_value_or_missing"]

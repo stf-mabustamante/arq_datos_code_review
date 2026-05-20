@@ -1,0 +1,345 @@
+{
+  "summary": {
+    "version": "compact-1",
+    "purpose": "Mapa compacto para leer archivos .ini TLS en validaciones AutoEdd.",
+    "scope": [
+      "Seleccion de ini UNI con TASK dbt_run y extraccion de CLOUD_RUN_NAME",
+      "Lectura de campos top_level y MESSAGE JSON",
+      "Soporte a consultas humanas frecuentes usadas por el agente"
+    ],
+    "source_catalog": "tls_parametros_task_data_catalog.csv"
+  },
+  "agent_instructions": [
+    "Ignorar lineas comentadas que comiencen con # o ;.",
+    "Para campos top_level buscar el patron exacto CAMPO=.",
+    "Para campos en scope message buscar MESSAGE= y parsear el JSON antes de extraer la clave.",
+    "Si la consulta es humana, resolver primero con lookup_index y luego restringir por task_profile.",
+    "No inferir campos fuera de este mapping compacto."
+  ],
+  "resolution_order": [
+    "Identificar TASK",
+    "Resolver task_profile",
+    "Leer campos top_level requeridos",
+    "Si aplica, parsear MESSAGE",
+    "Buscar el campo exacto o por concepto"
+  ],
+  "task_profiles": {
+    "fw_ingesta_tasks.dbt/run:dbt_run": {
+      "family": "fw_ingesta.dbt",
+      "top_level_fields": [
+        "TASK",
+        "PROJECT",
+        "SERVICE_ACCOUNT",
+        "CLOUD_RUN_NAME",
+        "FLG_CLOUD_RUN",
+        "FLG_PCM",
+        "PCM_DOM_PROJECT_ID",
+        "PCM_DEFAULT_CONTROLS_SA",
+        "PCM_EXTRA_VARS",
+        "MESSAGE"
+      ],
+      "message_fields": [
+        "appname",
+        "runid",
+        "dbt_project",
+        "target",
+        "variables"
+      ]
+    },
+    "fw_ingesta_tasks.dbt/run:dbt_run_select": {
+      "family": "fw_ingesta.dbt",
+      "top_level_fields": [
+        "TASK",
+        "PROJECT",
+        "SERVICE_ACCOUNT",
+        "BUCKET",
+        "MESSAGE"
+      ],
+      "message_fields": [
+        "appname",
+        "runid",
+        "dbt_project",
+        "target",
+        "variables"
+      ]
+    },
+    "fw_ingesta_tasks.dataflow/run:create_job_templated": {
+      "family": "fw_ingesta.dataflow",
+      "top_level_fields": [
+        "TASK",
+        "PROJECT",
+        "SERVICE_ACCOUNT",
+        "CLOUD_RUN_NAME",
+        "PCM_DOM_PROJECT_ID",
+        "PCM_DEFAULT_CONTROLS_SA",
+        "PCM_EXTRA_VARS",
+        "BUCKET_COMMON",
+        "MESSAGE"
+      ],
+      "message_fields": [
+        "project_id",
+        "job_name",
+        "service_account_email",
+        "gs_temp_location",
+        "gcs_template_path",
+        "udf_path",
+        "udf_name",
+        "schema_path",
+        "bq_table_id",
+        "input_file_path",
+        "bq_temp_file_path",
+        "location",
+        "network",
+        "subnet"
+      ]
+    },
+    "main/run:create_table_if_needed": {
+      "family": "main",
+      "top_level_fields": [
+        "TASK",
+        "PROJECT",
+        "BUCKET",
+        "MESSAGE"
+      ],
+      "message_fields": [
+        "project_id",
+        "schema_path",
+        "dataset",
+        "table_name",
+        "field_partition"
+      ]
+    },
+    "main/run:check_file_exists": {
+      "family": "main",
+      "top_level_fields": [
+        "TASK",
+        "PROJECT",
+        "MESSAGE"
+      ],
+      "message_fields": [
+        "project_id",
+        "bucket_filepara",
+        "nombre_archivo",
+        "date_partition"
+      ]
+    },
+    "main/run:copy_bucket_to_bucket": {
+      "family": "main",
+      "top_level_fields": [
+        "TASK",
+        "PROJECT",
+        "MESSAGE"
+      ],
+      "message_fields": [
+        "project_id",
+        "source_bucket_name",
+        "destination_bucket_name",
+        "source_blob_name",
+        "destination_blob_name"
+      ]
+    },
+    "main/run:copy_blob": {
+      "family": "main",
+      "top_level_fields": [
+        "TASK",
+        "PROJECT",
+        "MESSAGE"
+      ],
+      "message_fields": [
+        "project_id",
+        "destination_bucket_name",
+        "blob_destination"
+      ]
+    },
+    "run_dbt": {
+      "family": "run_dbt",
+      "top_level_fields": [
+        "TASK",
+        "PROJECT",
+        "SERVICE_ACCOUNT",
+        "BUCKET",
+        "MESSAGE"
+      ],
+      "message_fields": [
+        "periodo",
+        "ambient",
+        "bucket_destino",
+        "ruta_destino",
+        "uri",
+        "source_table",
+        "target_table",
+        "macro_name"
+      ]
+    }
+  },
+  "field_catalog": {
+    "top_level": {
+      "TASK": {
+        "type": "string",
+        "search": "TASK=",
+        "meaning": "Task exacta que determina como interpretar el ini."
+      },
+      "MESSAGE": {
+        "type": "json_string",
+        "search": "MESSAGE=",
+        "meaning": "JSON con parametros task-specific.",
+        "requires_json_parse": true
+      },
+      "PROJECT": {
+        "type": "gcp_project_id",
+        "search": "PROJECT=",
+        "meaning": "Proyecto GCP del bloque del ini."
+      },
+      "SERVICE_ACCOUNT": {
+        "type": "email",
+        "search": "SERVICE_ACCOUNT=",
+        "meaning": "Cuenta de servicio principal."
+      },
+      "CLOUD_RUN_NAME": {
+        "type": "string",
+        "search": "CLOUD_RUN_NAME=",
+        "meaning": "Identificador del servicio Cloud Run asociado."
+      },
+      "FLG_CLOUD_RUN": {
+        "type": "string_or_int",
+        "search": "FLG_CLOUD_RUN=",
+        "meaning": "Flag de uso de Cloud Run."
+      },
+      "FLG_PCM": {
+        "type": "string_or_int",
+        "search": "FLG_PCM=",
+        "meaning": "Flag de controles PCM."
+      },
+      "PCM_DOM_PROJECT_ID": {
+        "type": "gcp_project_id",
+        "search": "PCM_DOM_PROJECT_ID=",
+        "meaning": "Proyecto de dominio."
+      },
+      "PCM_DEFAULT_CONTROLS_SA": {
+        "type": "email",
+        "search": "PCM_DEFAULT_CONTROLS_SA=",
+        "meaning": "Cuenta de servicio de controles."
+      },
+      "PCM_DEFAULT_SA": {
+        "type": "email",
+        "search": "PCM_DEFAULT_SA=",
+        "meaning": "Cuenta de servicio por defecto."
+      },
+      "PCM_INVOKER_SA": {
+        "type": "email",
+        "search": "PCM_INVOKER_SA=",
+        "meaning": "Cuenta invocadora."
+      },
+      "PCM_EXTRA_VARS": {
+        "type": "string",
+        "search": "PCM_EXTRA_VARS=",
+        "meaning": "Variables compactadas clave=valor, separadas por coma."
+      },
+      "BUCKET": {
+        "type": "string",
+        "search": "BUCKET=",
+        "meaning": "Bucket principal o URI base."
+      },
+      "BUCKET_COMMON": {
+        "type": "string",
+        "search": "BUCKET_COMMON=",
+        "meaning": "Bucket comun de Dataflow."
+      }
+    },
+    "message": {
+      "appname": "Nombre logico de la app DBT/run_dbt.",
+      "runid": "Identificador de corrida.",
+      "dbt_project": "Proyecto DBT declarado en el payload.",
+      "target": "Target DBT.",
+      "variables": "Objeto de variables DBT.",
+      "periodo": "Periodo de ejecucion DBT.",
+      "ambient": "Ambiente de ejecucion DBT.",
+      "project_id": "Proyecto GCP dentro de MESSAGE.",
+      "service_account_email": "Cuenta de servicio Dataflow en MESSAGE.",
+      "gs_temp_location": "Ruta temporal GCS.",
+      "gcs_template_path": "Template de Dataflow.",
+      "udf_path": "Ruta del UDF.",
+      "udf_name": "Nombre de la funcion UDF.",
+      "schema_path": "Ruta del schema.",
+      "bq_table_id": "Tabla BigQuery destino.",
+      "input_file_path": "Ruta del archivo input en GCS.",
+      "bq_temp_file_path": "Ruta temporal BigQuery/GCS.",
+      "location": "Region de ejecucion.",
+      "network": "Red VPC.",
+      "subnet": "Subred.",
+      "bucket_filepara": "Bucket origen para chequeo de archivo.",
+      "bucket_name_orig": "Bucket origen en excel_to_csv.",
+      "source_bucket_name": "Bucket origen en copy_bucket_to_bucket.",
+      "bucket_destino": "Bucket destino en run_dbt.",
+      "bucket_name_dest": "Bucket destino alternativo.",
+      "destination_bucket_name": "Bucket destino en tareas main.",
+      "ruta_destino": "Ruta destino de salida.",
+      "uri": "URI destino o referencia GCS.",
+      "source_table": "Tabla fuente en run_dbt.",
+      "target_table": "Tabla destino en run_dbt.",
+      "macro_name": "Macro DBT a ejecutar."
+    }
+  },
+  "lookup_index": {
+    "bucket origen": [
+      "bucket_filepara",
+      "bucket_name_orig",
+      "source_bucket_name"
+    ],
+    "bucket destino": [
+      "bucket_destino",
+      "bucket_name_dest",
+      "destination_bucket_name"
+    ],
+    "bucket_uri": [
+      "BUCKET",
+      "BUCKET_COMMON",
+      "bq_temp_file_path",
+      "gcs_template_path",
+      "gs_temp_location",
+      "input_file_path",
+      "schema_path",
+      "udf_path",
+      "uri"
+    ],
+    "project id": [
+      "PCM_DOM_PROJECT_ID",
+      "PROJECT",
+      "project_id"
+    ],
+    "service account": [
+      "PCM_DEFAULT_CONTROLS_SA",
+      "PCM_DEFAULT_SA",
+      "PCM_INVOKER_SA",
+      "SERVICE_ACCOUNT",
+      "service_account_email"
+    ],
+    "ruta": [
+      "schema_path",
+      "udf_path",
+      "input_file_path",
+      "gcs_template_path",
+      "gs_temp_location",
+      "ruta_destino",
+      "uri"
+    ],
+    "message json": [
+      "MESSAGE"
+    ],
+    "dbt payload": [
+      "appname",
+      "runid",
+      "dbt_project",
+      "target",
+      "variables"
+    ],
+    "dataflow payload": [
+      "project_id",
+      "service_account_email",
+      "gcs_template_path",
+      "schema_path",
+      "input_file_path",
+      "bq_table_id"
+    ]
+  }
+}
